@@ -1,0 +1,7 @@
+# idris2-subcontract pack.toml
+# Subcontract framework depends on idris2-yul
+
+[custom.all.idris2-yul]
+type   = "local"
+path   = "/Users/bob/code/idris2-yul"
+ipkg   = "idris2-yul.ipkg"

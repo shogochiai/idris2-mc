@@ -1,0 +1,18 @@
+package idris2-subcontract
+version = 0.1.0
+
+authors = "shogochiai"
+
+brief = "Subcontract framework for Idris2 - UCS patterns on idris2-yul"
+
+sourcedir = "src"
+
+depends = base
+        , contrib
+        , idris2-yul
+
+modules = Subcontract.Core.Proxy
+        , Subcontract.Core.Dictionary
+        , Subcontract.Std.Functions.FeatureToggle
+        , Subcontract.Std.Functions.Clone
+        , Subcontract.Std.Functions.Receive
