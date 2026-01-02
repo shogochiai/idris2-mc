@@ -14,6 +14,9 @@ depends = base
 modules = Subcontract.Core.Proxy
         , Subcontract.Core.Dictionary
         , Subcontract.Core.Entry
+        , Subcontract.Core.Process
+        , Subcontract.Core.Script
+        , Subcontract.Core.Capability
         , Subcontract.Core.ABI.Sig
         , Subcontract.Core.ABI.Decoder
         , Subcontract.Std.Functions.FeatureToggle
