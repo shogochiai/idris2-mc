@@ -17,6 +17,8 @@ modules = Subcontract.Core.Proxy
         , Subcontract.Core.Process
         , Subcontract.Core.Script
         , Subcontract.Core.Capability
+        , Subcontract.Core.Bundle
+        , Subcontract.Core.StorageCap
         , Subcontract.Core.ABI.Sig
         , Subcontract.Core.ABI.Decoder
         , Subcontract.Std.Functions.FeatureToggle
