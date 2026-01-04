@@ -1,516 +1,457 @@
-# idris2-subcontract API Reference
+# API Reference
 
-## Module: Subcontract.Standards.ERC7546.Slots
+## Core Modules
 
-Constants for ERC-7546 UCS pattern storage slots and selectors.
+### Subcontract.Core.Storable
 
-### Storage Slots
-
-```idris
-||| Dictionary storage slot
-||| keccak256("erc7546.proxy.dictionary") - 1
-DICTIONARY_SLOT : Integer
-DICTIONARY_SLOT = 0x267691be3525af8a813d30db0c9e2bad08f63baecf6dceb85e2cf3676cff56f4
-```
-
-### Function Selectors
-
-| Constant | Function | Value |
-|----------|----------|-------|
-| `SEL_GET_IMPL` | `getImplementation(bytes4)` | `0xdc9cc645` |
-| `SEL_SET_IMPL` | `setImplementation(bytes4,address)` | `0x2c3c3e4e` |
-| `SEL_OWNER` | `owner()` | `0x8da5cb5b` |
-| `SEL_TRANSFER` | `transferOwnership(address)` | `0xf2fde38b` |
-
-### Events
-
-| Constant | Event | Topic |
-|----------|-------|-------|
-| `EVENT_DICTIONARY_UPGRADED` | `DictionaryUpgraded(address indexed)` | `0x23e4...` |
-
----
-
-## Module: Subcontract.Standards.ERC7546.Forward
-
-Core forwarding functions for ERC-7546 proxy pattern.
-
-### Dictionary Access
+Type-safe storage with phantom-typed references.
 
 ```idris
-||| Get dictionary address from storage
-getDictionary : IO Integer
+-- Interface for types that can be stored in EVM storage
+interface Storable a where
+  slotCount : Nat                        -- Number of 256-bit slots needed
+  toSlots : a -> Vect slotCount Bits256  -- Serialize to slots
+  fromSlots : Vect slotCount Bits256 -> a -- Deserialize from slots
 
-||| Set dictionary address in storage
-setDictionary : Integer -> IO ()
-```
+-- Phantom-typed storage reference
+data Ref : Type -> Type where
+  MkRef : Bits256 -> Ref a
 
-### Query Implementation
-
-```idris
-||| Query dictionary for implementation address via STATICCALL
-||| Calls dictionary.getImplementation(bytes4 selector)
-|||
-||| @param selector - The function selector to look up
-||| @return Implementation address, or 0 if not found
-queryDictionary : Integer -> IO Integer
+-- Storage operations
+get : Storable a => Ref a -> IO a
+set : Storable a => Ref a -> a -> IO ()
 ```
 
 **Example:**
 ```idris
-impl <- queryDictionary 0x12345678
-if impl == 0
-  then evmRevert 0 0
-  else -- call implementation
-```
+record Member where
+  constructor MkMember
+  addr : Bits256
+  meta : Bits256
 
-### Forwarding
-
-```idris
-||| Forward call to dictionary via DELEGATECALL
-||| Simple pattern where dictionary handles dispatch
-forwardToDictionary : IO ()
-
-||| Forward call to implementation (correct ERC-7546 flow)
-||| 1. Extract selector from calldata
-||| 2. Query dictionary for implementation (STATICCALL)
-||| 3. DELEGATECALL to implementation
-forwardToImplementation : IO ()
-```
-
-### Upgrade
-
-```idris
-||| Upgrade dictionary to new address, emit DictionaryUpgraded event
-upgradeDictionary : Integer -> IO ()
+Storable Member where
+  slotCount = 2
+  toSlots m = [m.addr, m.meta]
+  fromSlots [a, m] = MkMember a m
 ```
 
 ---
 
-## Module: Subcontract.Core.ABI.Sig
+### Subcontract.Core.Schema
 
-Type-safe function signatures and selectors with phantom type binding.
-
-### ABI Types
+Schema definitions for storage layout documentation.
 
 ```idris
-||| Static ABI types (32 bytes each)
-data ABIStaticType
-  = TUint256
-  | TBytes32
-  | TAddress
-  | TBool
+-- Field definition
+record Field where
+  constructor MkField
+  fieldName : String
+  fieldType : String
+  fieldSlot : Nat
 
-||| Get canonical Solidity type string
-abiTypeStr : ABIStaticType -> String
--- abiTypeStr TAddress = "address"
-```
-
-### Function Signature
-
-```idris
-||| Function signature with name and typed parameters
-record Sig where
-  constructor MkSig
-  name : String
-  args : List ABIStaticType
-  rets : List ABIStaticType
-
-||| Generate canonical signature string
-sigString : Sig -> String
--- sigString (MkSig "transfer" [TAddress, TUint256] [TBool])
--- => "transfer(address,uint256)"
-```
-
-**Example:**
-```idris
-transferSig : Sig
-transferSig = MkSig "transfer" [TAddress, TUint256] [TBool]
-```
-
-### Phantom-Typed Selector
-
-```idris
-||| Selector bound to specific signature via phantom type
-data Sel : (sig : Sig) -> Type where
-  MkSel : (value : Integer) -> Sel sig
-
-||| Extract 4-byte selector value
-selValue : Sel sig -> Integer
-
-||| Show selector with signature for debugging
-showSel : {sig : Sig} -> Sel sig -> String
-```
-
-**Example:**
-```idris
-transferSel : Sel transferSig
-transferSel = MkSel 0xa9059cbb
-
--- Type-safe: transferSel can only be used with transferSig
+-- Schema definition
+record Schema where
+  constructor MkSchema
+  schemaName : String
+  schemaFields : List Field
 ```
 
 ---
 
-## Module: Subcontract.Core.ABI.Decoder
+### Subcontract.Core.Derived
 
-Type-safe calldata decoder with automatic offset tracking.
+Schema derivation and state machine proofs.
 
-### Typed Wrappers
+#### HasSchema Interface
 
 ```idris
-record Address where
-  constructor MkAddress
-  addrValue : Integer
-
-record Bytes32 where
-  constructor MkBytes32
-  bytes32Value : Integer
-
-record Uint256 where
-  constructor MkUint256
-  uint256Value : Integer
+interface Storable a => HasSchema a where
+  schema : Schema
+  fieldNames : Vect (slotCount {a}) String
 ```
 
-### Decoder Monad
+#### State Machine Proofs
 
 ```idris
-||| Decoder that reads from calldata at current offset
-||| Offset starts at 4 (after selector) and advances by 32 per slot
-record Decoder a where
-  constructor MkDecoder
-  runDec : Integer -> IO (a, Integer)
+-- Proposal states
+data PropState = PropDraft | PropVoting | PropApproved | PropRejected | PropExecuted
 
--- Implements Functor, Applicative, Monad
+-- Valid transitions (only these compile!)
+data PropTransition : PropState -> PropState -> Type where
+  Submit  : PropTransition PropDraft PropVoting
+  Approve : PropTransition PropVoting PropApproved
+  Reject  : PropTransition PropVoting PropRejected
+  Execute : PropTransition PropApproved PropExecuted
+
+-- Type-indexed proposal
+data StatefulProposal : PropState -> Type where
+  MkStatefulProposal : (id : Bits256) -> (state : PropState) -> StatefulProposal state
+
+-- Transition function
+transitionProposal : PropTransition from to -> StatefulProposal from -> IO (StatefulProposal to)
 ```
 
-### Primitive Decoders
+#### Workflow Steps
 
 ```idris
-||| Decode raw 32-byte slot
-decodeSlot : Decoder Integer
+-- Chain multiple transitions
+data WorkflowStep : PropState -> PropState -> Type where
+  SingleStep : PropTransition from to -> WorkflowStep from to
+  ChainSteps : {mid : PropState} -> PropTransition from mid -> WorkflowStep mid to -> WorkflowStep from to
 
-||| Decode Address (masked to 20 bytes)
-decodeAddress : Decoder Address
-
-||| Decode Bytes32
-decodeBytes32 : Decoder Bytes32
-
-||| Decode Uint256
-decodeUint256 : Decoder Uint256
-
-||| Decode Bool (non-zero = True)
-decodeBool : Decoder Bool
-```
-
-### Runner
-
-```idris
-||| Run decoder starting at offset 4 (after selector)
-runDecoder : Decoder a -> IO a
-
-||| Get current offset (for debugging)
-getOffset : Decoder Integer
-```
-
-**Example:**
-```idris
--- Decode transfer(address to, uint256 amount)
-decodeTransfer : Decoder (Address, Uint256)
-decodeTransfer = do
-  to <- decodeAddress
-  amount <- decodeUint256
-  pure (to, amount)
-
--- In entry point:
-main : IO ()
-main = do
-  (to, amount) <- runDecoder decodeTransfer
-  transferImpl (addrValue to) (uint256Value amount)
+-- Pre-defined workflows
+fullApprovalWorkflow : WorkflowStep PropDraft PropExecuted  -- Draft -> Voting -> Approved -> Executed
+rejectionWorkflow : WorkflowStep PropDraft PropRejected     -- Draft -> Voting -> Rejected
 ```
 
 ---
 
-## Module: Subcontract.Core.Entry
+### Subcontract.Core.Invariants
 
-Type-safe entry points with dispatch.
+Compile-time invariants via Curry-Howard correspondence.
 
-### Entry Point
+#### Bounded Values
 
 ```idris
-||| Entry point bound to specific signature
-record Entry (sig : Sig) where
-  constructor MkEntry
-  selector : Sel sig
-  handler : IO ()
+-- Value proven to be <= cap at compile time
+record Bounded (cap : Nat) where
+  constructor MkBounded
+  value : Nat
+  {auto inBounds : LTE value cap}
+
+mkBounded : (cap : Nat) -> (n : Nat) -> Maybe (Bounded cap)
+boundedAdd : Bounded cap -> (delta : Nat) -> (fits : LTE (value + delta) cap) -> Bounded cap
+boundedSub : Bounded cap -> (delta : Nat) -> (fits : LTE delta value) -> Bounded cap
 ```
 
-### Existential Wrapper
+#### NonZero
 
 ```idris
-||| Existential wrapper for entries with different signatures
-data SomeEntry : Type where
-  MkSomeEntry : {sig : Sig} -> Entry sig -> SomeEntry
+-- Non-zero natural number (safe division)
+data NonZero : Type where
+  MkNonZero : (n : Nat) -> {auto prf : IsSucc n} -> NonZero
 
-||| Convert typed entry to existential
-entry : {sig : Sig} -> Entry sig -> SomeEntry
+mkNonZero : (n : Nat) -> Maybe NonZero
+safeDiv : Nat -> NonZero -> Nat  -- Total! No runtime check needed
+safeMod : Nat -> NonZero -> Nat
 ```
 
-### Dispatch
+#### TokenBalance
 
 ```idris
-||| Dispatch based on selector from calldata
-||| Finds matching entry and executes handler, reverts if not found
-dispatch : List SomeEntry -> IO ()
+-- Balance proven to be <= totalSupply
+record TokenBalance (totalSupply : Nat) where
+  constructor MkTokenBalance
+  balance : Nat
+  {auto balanceValid : LTE balance totalSupply}
 
-||| Get list of registered selector values (for debugging)
-registeredSelectors : List SomeEntry -> List Integer
+-- Transfer with compile-time proofs
+transfer : {supply : Nat}
+        -> (amount : Nat)
+        -> (sender : TokenBalance supply)
+        -> (recipient : TokenBalance supply)
+        -> (hasEnough : LTE amount (balance sender))
+        -> (noOverflow : LTE (balance recipient + amount) supply)
+        -> (TokenBalance supply, TokenBalance supply)
 ```
 
-**Example:**
+#### ValidAllowance
+
 ```idris
--- Define entries
-transferEntry : Entry transferSig
-transferEntry = MkEntry transferSel $ do
-  (to, amount) <- runDecoder decodeTransfer
-  transferImpl (addrValue to) (uint256Value amount)
-  returnBool True
+-- Allowance proven to be <= owner's balance
+record ValidAllowance (ownerBalance : Nat) where
+  constructor MkAllowance
+  allowance : Nat
+  {auto notExceedBalance : LTE allowance ownerBalance}
 
-balanceOfEntry : Entry balanceOfSig
-balanceOfEntry = MkEntry balanceOfSel $ do
-  addr <- runDecoder decodeAddress
-  bal <- getBalance (addrValue addr)
-  returnUint bal
-
--- Dispatch
-main : IO ()
-main = dispatch [entry transferEntry, entry balanceOfEntry]
+decreaseAllowance : (amount : Nat) -> ValidAllowance bal -> (hasAllowance : LTE amount allowance) -> ValidAllowance bal
 ```
 
----
-
-## Module: Subcontract.Core.StorageCap
-
-Capability-based storage access control.
-
-### Storage Capability
+#### Optimized Storage
 
 ```idris
-||| Opaque capability token
-||| Constructor not exported - only framework can create
-data StorageCap : Type
+-- Pack multiple values into one slot
+record PackedAccount where
+  constructor MkPackedAccount
+  packedData : Bits256  -- [128 balance][64 nonce][64 flags]
 
-||| Handler type: function that receives StorageCap
-Handler : Type -> Type
-Handler a = StorageCap -> IO a
-```
-
-### Storage Operations (require capability)
-
-```idris
-||| Read from storage slot
-sloadCap : StorageCap -> Integer -> IO Integer
-
-||| Write to storage slot
-sstoreCap : StorageCap -> Integer -> Integer -> IO ()
-
-||| Memory store
-mstoreCap : StorageCap -> Integer -> Integer -> IO ()
-
-||| Keccak256 hash
-keccak256Cap : StorageCap -> Integer -> Integer -> IO Integer
-```
-
-### Mapping Operations
-
-```idris
-||| Calculate mapping slot: keccak256(key . baseSlot)
-mappingSlotCap : StorageCap -> Integer -> Integer -> IO Integer
-
-||| Read from mapping
-readMappingCap : StorageCap -> Integer -> Integer -> IO Integer
-
-||| Write to mapping
-writeMappingCap : StorageCap -> Integer -> Integer -> Integer -> IO ()
-```
-
-### Running Handlers
-
-```idris
-||| Run handler with storage capability
-||| Only framework calls this - user code receives the cap
-runHandler : Handler a -> IO a
-```
-
-### Composing Handlers
-
-```idris
-||| Pure handler (no storage access)
-pureHandler : a -> Handler a
-
-||| Bind handlers
-bindHandler : Handler a -> (a -> Handler b) -> Handler b
-
-||| Sequence handlers
-seqHandler : Handler () -> Handler b -> Handler b
-```
-
-**Example:**
-```idris
-SLOT_BALANCE : Integer
-SLOT_BALANCE = 0x1234...
-
-getBalanceHandler : Integer -> Handler Integer
-getBalanceHandler addr cap = do
-  readMappingCap cap SLOT_BALANCE addr
-
-setBalanceHandler : Integer -> Integer -> Handler ()
-setBalanceHandler addr amount cap = do
-  writeMappingCap cap SLOT_BALANCE addr amount
-
--- In main:
-main : IO ()
-main = do
-  addr <- caller
-  balance <- runHandler (getBalanceHandler addr)
-  returnUint balance
+packAccount : Bits256 -> Bits256 -> Bool -> PackedAccount
+unpackBalance : PackedAccount -> Bits256
+unpackNonce : PackedAccount -> Bits256
+unpackFrozen : PackedAccount -> Bool
 ```
 
 ---
 
-## Module: Subcontract.Std.Functions.FeatureToggle
+### Subcontract.Core.AccessControl
 
-Admin-controlled feature enable/disable.
+Type-safe access control with role proofs.
 
-### Storage
-
-| Slot | Description |
-|------|-------------|
-| `SLOT_ADMIN` | Admin address |
-| `SLOT_FEATURE_TOGGLE` | Mapping: selector -> disabled |
-
-### Functions
+#### Roles
 
 ```idris
-||| Check if caller is admin
-isAdmin : IO Bool
-
-||| Require caller to be admin, revert if not
-requireAdmin : IO ()
-
-||| Check if feature (selector) is disabled
-isFeatureDisabled : Integer -> IO Bool
-
-||| Revert if feature is disabled
-shouldBeActive : Integer -> IO ()
-
-||| Toggle feature enabled/disabled (admin only)
-featureToggle : Integer -> IO ()
-
-||| Enable specific feature (admin only)
-enableFeature : Integer -> IO ()
-
-||| Disable specific feature (admin only)
-disableFeature : Integer -> IO ()
+data Role = Owner | Admin | Member | Operator | Pauser | Minter
 ```
 
-**Example:**
+#### HasRole Proof
+
 ```idris
-myFunction : IO ()
-myFunction = do
-  shouldBeActive 0x12345678  -- Revert if disabled
-  -- ... function logic
+-- Proof that address has role (compile-time constraint)
+data HasRole : Role -> Bits256 -> Type where
+  MkHasRole : (role : Role) -> (addr : Bits256) -> HasRole role addr
+
+-- Get proof at runtime
+checkRole : RoleStorage -> (role : Role) -> (addr : Bits256) -> IO (Maybe (HasRole role addr))
+```
+
+#### Role Management
+
+```idris
+-- Requires Admin proof to grant/revoke
+grantRole : HasRole Admin granter -> RoleStorage -> Role -> Bits256 -> IO ()
+revokeRole : HasRole Admin revoker -> RoleStorage -> Role -> Bits256 -> IO ()
+```
+
+#### Owner Pattern
+
+```idris
+record OwnerStorage where
+  constructor MkOwnerStorage
+  ownerSlot : Bits256
+
+checkOwner : OwnerStorage -> Bits256 -> IO (Maybe (HasRole Owner addr))
+transferOwnership : HasRole Owner current -> OwnerStorage -> Bits256 -> IO ()
+renounceOwnership : HasRole Owner current -> OwnerStorage -> IO ()
+```
+
+#### Pausable Pattern
+
+```idris
+record PauseStorage where
+  constructor MkPauseStorage
+  pauseSlot : Bits256
+
+isPaused : PauseStorage -> IO Bool
+pause : HasRole Pauser pauser -> PauseStorage -> IO ()
+unpause : HasRole Pauser pauser -> PauseStorage -> IO ()
+whenNotPaused : PauseStorage -> IO a -> IO (Maybe a)
 ```
 
 ---
 
-## Module: Subcontract.Std.Functions.Clone
+### Subcontract.Core.Reentrancy
 
-EIP-1167 minimal proxy creation.
+Linear-style reentrancy protection.
 
-### Functions
+#### Lock States
 
 ```idris
-||| Create EIP-1167 minimal proxy pointing to dictionary
-createMinimalProxy : Integer -> IO Integer
+data LockState = Unlocked | Locked
 
-||| Clone current contract (new proxy with same dictionary)
-clone : IO Integer
-
-||| Clone with custom dictionary
-cloneWithDictionary : Integer -> IO Integer
+-- Type-indexed lock
+data Lock : LockState -> Type where
+  MkUnlocked : Bits256 -> Lock Unlocked
+  MkLocked : Bits256 -> Lock Locked
 ```
 
-### Events
+#### State Transitions
 
-| Event | Topic |
-|-------|-------|
-| `ProxyCreated(address indexed dictionary, address indexed proxy)` | `EVENT_PROXY_CREATED` |
+```idris
+-- CONSUMES Unlocked, PRODUCES Locked
+acquireLock : Lock Unlocked -> IO (Lock Locked)
+
+-- CONSUMES Locked, PRODUCES Unlocked
+releaseLock : Lock Locked -> IO (Lock Unlocked)
+```
+
+#### Protected Execution
+
+```idris
+-- Execute with lock held
+withLock : Lock Unlocked -> (Lock Locked -> IO a) -> IO (a, Lock Unlocked)
+withLock_ : Lock Unlocked -> (Lock Locked -> IO a) -> IO a
+
+-- Try to get unlocked state
+tryUnlock : LockStorage -> IO (Maybe (Lock Unlocked))
+```
+
+#### Multi-Lock
+
+```idris
+data LockId = WithdrawLock | SwapLock | FlashLoanLock | CustomLock Bits256
+
+record MultiLockStorage where
+  constructor MkMultiLockStorage
+  baseLockSlot : Bits256
+
+getLock : MultiLockStorage -> LockId -> IO (Either (Lock Locked) (Lock Unlocked))
+withResourceLock : MultiLockStorage -> LockId -> (Lock Locked -> IO a) -> IO (Maybe a)
+```
+
+#### Safe Withdraw Example
+
+```idris
+safeWithdraw : Lock Unlocked -> Bits256 -> Bits256 -> IO (Lock Unlocked, Bool)
+safeBatchWithdraw : Lock Unlocked -> List (Bits256, Bits256) -> IO (Lock Unlocked, Nat)
+```
 
 ---
 
-## Module: Subcontract.Std.Functions.Receive
+### Subcontract.Core.Call
+
+Type-safe external calls (CALL, DELEGATECALL, STATICCALL).
+
+#### Call Result
+
+```idris
+-- Explicit success or revert
+data CallResult : Type -> Type where
+  CallSuccess : a -> CallResult a
+  CallReverted : (returnSize : Bits256) -> CallResult a
+
+isSuccess : CallResult a -> Bool
+fromCallResult : a -> CallResult a -> a
+```
+
+#### Call Specification
+
+```idris
+record CallSpec where
+  constructor MkCallSpec
+  target : Bits256
+  value : Bits256
+  gasLimit : Bits256
+
+callTo : (target : Bits256) -> (gas : Bits256) -> CallSpec
+callWithValue : (target : Bits256) -> (value : Bits256) -> (gas : Bits256) -> CallSpec
+```
+
+#### Typed Calls
+
+```idris
+-- Return type is decoded automatically via Storable
+typedCall : Storable a => CallSpec -> Calldata -> IO (CallResult a)
+typedDelegatecall : Storable a => Bits256 -> Bits256 -> Calldata -> IO (CallResult a)
+typedStaticcall : Storable a => Bits256 -> Bits256 -> Calldata -> IO (CallResult a)
+
+-- Call or revert
+callOrRevert : Storable a => CallSpec -> Calldata -> IO a
+tryCall : Storable a => a -> CallSpec -> Calldata -> IO a
+```
+
+#### ERC20 Helpers
+
+```idris
+safeTransfer : Bits256 -> Bits256 -> Bits256 -> Bits256 -> IO Bool
+safeTransferFrom : Bits256 -> Bits256 -> Bits256 -> Bits256 -> Bits256 -> IO Bool
+```
+
+---
+
+### Subcontract.Core.Gas
+
+Compile-time gas modeling via type-level naturals.
+
+#### Gas Operations
+
+```idris
+-- Gas cost is a type-level Nat
+data GasOp : Nat -> Type where
+  ColdSLoad : GasOp 2100
+  WarmSLoad : GasOp 100
+  SStore : GasOp 20000
+  SStoreReset : GasOp 2900
+  ColdCall : GasOp 2600
+  WarmCall : GasOp 100
+  ValueCall : GasOp 11600
+  MemOp : GasOp 3
+  Pure : GasOp 0
+  Custom : (cost : Nat) -> GasOp cost
+```
+
+#### Gas Sequences
+
+```idris
+-- Total gas is computed at compile time
+data GasSeq : Nat -> Type where
+  Done : GasSeq 0
+  Op : GasOp g -> GasSeq g
+  Then : GasSeq g1 -> GasSeq g2 -> GasSeq (g1 + g2)
+
+totalGas : GasSeq g -> Nat
+```
+
+#### Gas Bounds
+
+```idris
+-- Proof that gas fits within limit
+data GasFits : (limit : Nat) -> (cost : Nat) -> Type where
+  MkGasFits : LTE cost limit -> GasFits limit cost
+
+boundedGas : (limit : Nat) -> GasSeq cost -> {auto prf : LTE cost limit} -> GasFits limit cost
+checkGasFits : (limit : Nat) -> (cost : Nat) -> Maybe (GasFits limit cost)
+```
+
+#### Bounded Transactions
+
+```idris
+record BoundedTx (limit : Nat) where
+  constructor MkBoundedTx
+  gasUsed : Nat
+  proof : GasFits limit gasUsed
+  computation : IO ()
+
+boundedTx : (limit : Nat) -> IO () -> GasSeq cost -> {auto prf : LTE cost limit} -> BoundedTx limit
+```
+
+#### Common Patterns
+
+```idris
+readSlotCold : GasSeq 2100
+writeSlot : GasSeq 20000
+modifySlotPattern : GasSeq 5000  -- sload + sstore
+externalCallCold : GasSeq 2600
+
+-- N-slot operations
+readSlots : (n : Nat) -> GasSeq (n * 2100)
+writeSlots : (n : Nat) -> GasSeq (n * 20000)
+```
+
+#### Estimation Helpers
+
+```idris
+estimateStorageGas : (reads : Nat) -> (writes : Nat) -> Nat
+estimateCallGas : (calls : Nat) -> (withValue : Nat) -> Nat
+estimateTxGas : (base : Nat) -> (reads : Nat) -> (writes : Nat) -> (calls : Nat) -> Nat
+```
+
+---
+
+## Standards Modules
+
+### Subcontract.Standards.ERC7546
+
+ERC-7546 Upgradeable Clone for Scalable contracts implementation.
+
+- `Slots.idr` - DICTIONARY_SLOT constant
+- `Forward.idr` - Proxy forwarding via DELEGATECALL
+- `Proxy.idr` - Complete proxy contract
+- `Dictionary.idr` - Selector to implementation mapping
+
+---
+
+## Standard Functions
+
+### Subcontract.Std.Functions.FeatureToggle
+
+```idris
+shouldBeActive : Bits256 -> IO ()  -- Revert if feature disabled
+```
+
+### Subcontract.Std.Functions.Clone
+
+EIP-1167 minimal proxy cloning.
+
+### Subcontract.Std.Functions.Receive
 
 ETH receive handling.
-
-### Functions
-
-```idris
-||| Emit Received event
-emitReceived : Integer -> Integer -> IO ()
-
-||| Handle incoming ETH transfer
-receive : IO ()
-
-||| Main dispatcher for receive functionality
-||| If calldata is empty, treat as receive()
-receiveMain : IO ()
-```
-
-### Events
-
-| Event | Topic |
-|-------|-------|
-| `Received(address indexed from, uint256 amount)` | `EVENT_RECEIVED` |
-
----
-
-## EVM Primitives (from idris2-yul)
-
-The following are imported from `EVM.Primitives`:
-
-```idris
--- Storage
-sload : Integer -> IO Integer
-sstore : Integer -> Integer -> IO ()
-
--- Memory
-mstore : Integer -> Integer -> IO ()
-mload : Integer -> IO Integer
-
--- Calldata
-calldatasize : IO Integer
-calldataload : Integer -> IO Integer
-calldatacopy : Integer -> Integer -> Integer -> IO ()
-
--- Return/Revert
-evmReturn : Integer -> Integer -> IO ()
-evmRevert : Integer -> Integer -> IO ()
-stop : IO ()
-
--- Context
-caller : IO Integer
-callvalue : IO Integer
-gas : IO Integer
-
--- External calls
-staticcall : Integer -> Integer -> Integer -> Integer -> Integer -> Integer -> IO Integer
-delegatecall : Integer -> Integer -> Integer -> Integer -> Integer -> Integer -> IO Integer
-
--- Helpers
-getSelector : IO Integer
-returnUint : Integer -> IO ()
-returnBool : Bool -> IO ()
-returnOrRevert : Integer -> Integer -> Integer -> IO ()
-```
-
-See `EVM.Storage.Namespace` for mapping/array slot calculations.

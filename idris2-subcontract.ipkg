@@ -23,7 +23,14 @@ modules = Subcontract.Standards.ERC7546.Slots
         , Subcontract.Core.Capability
         , Subcontract.Core.Bundle
         , Subcontract.Core.StorageCap
+        , Subcontract.Core.Storable
         , Subcontract.Core.Schema
+        , Subcontract.Core.Derived
+        , Subcontract.Core.Invariants
+        , Subcontract.Core.AccessControl
+        , Subcontract.Core.Reentrancy
+        , Subcontract.Core.Call
+        , Subcontract.Core.Gas
         , Subcontract.Core.ABI.Sig
         , Subcontract.Core.ABI.Decoder
         , Subcontract.Std.Functions.FeatureToggle

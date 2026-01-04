@@ -13,6 +13,11 @@ idris2-subcontract provides:
 - **Standard Functions**: FeatureToggle, Clone, Receive
 - **Type-Safe API**: ABI signatures, decoders, and entry points
 - **Storage Capability**: Controlled storage access via `StorageCap`
+- **Type-Safe Storage**: Phantom-typed `Ref`, `Storable` interface, `Schema` derivation
+- **Compile-Time Invariants**: Bounded values, NonZero divisors, TokenBalance proofs
+- **Access Control as Types**: `HasRole` proofs instead of runtime `require()`
+- **Reentrancy Protection**: Linear-style `Lock` types prevent reentrancy at compile time
+- **State Machine Proofs**: `ValidTransition` ensures only valid state changes compile
 
 ## Installation
 
@@ -42,25 +47,32 @@ pack build idris2-subcontract
 ```
 Subcontract/
 ├── Standards/
-│   └── ERC7546/           # ERC-7546 implementation
-│       ├── Slots.idr      # Constants (DICTIONARY_SLOT, etc.)
-│       ├── Forward.idr    # Proxy forwarding logic
-│       ├── Proxy.idr      # Proxy exports
-│       └── Dictionary.idr # Dictionary contract
+│   └── ERC7546/              # ERC-7546 implementation
+│       ├── Slots.idr         # Constants (DICTIONARY_SLOT, etc.)
+│       ├── Forward.idr       # Proxy forwarding logic
+│       ├── Proxy.idr         # Proxy exports
+│       └── Dictionary.idr    # Dictionary contract
 ├── Core/
-│   ├── Proxy.idr          # Re-exports Standards.ERC7546.Proxy
-│   ├── Dictionary.idr     # Re-exports Standards.ERC7546.Dictionary
-│   ├── Entry.idr          # Type-safe entry points
-│   ├── StorageCap.idr     # Storage capability token
-│   ├── ABI/
-│   │   ├── Sig.idr        # Function signatures
-│   │   └── Decoder.idr    # Calldata decoding
-│   └── ...
+│   ├── Proxy.idr             # Re-exports Standards.ERC7546.Proxy
+│   ├── Dictionary.idr        # Re-exports Standards.ERC7546.Dictionary
+│   ├── Entry.idr             # Type-safe entry points
+│   ├── StorageCap.idr        # Storage capability token
+│   ├── Storable.idr          # Type → slot layout derivation
+│   ├── Schema.idr            # Schema definitions for storage
+│   ├── Derived.idr           # Schema derivation, state machines
+│   ├── Invariants.idr        # Bounded, NonZero, TokenBalance
+│   ├── AccessControl.idr     # HasRole proofs, RBAC
+│   ├── Reentrancy.idr        # Lock types for reentrancy guard
+│   ├── Call.idr              # Type-safe external calls
+│   ├── Gas.idr               # Compile-time gas modeling
+│   └── ABI/
+│       ├── Sig.idr           # Function signatures
+│       └── Decoder.idr       # Calldata decoding
 └── Std/
     └── Functions/
-        ├── FeatureToggle.idr  # Admin feature toggle
-        ├── Clone.idr          # EIP-1167 proxy cloning
-        └── Receive.idr        # ETH receive handling
+        ├── FeatureToggle.idr # Admin feature toggle
+        ├── Clone.idr         # EIP-1167 proxy cloning
+        └── Receive.idr       # ETH receive handling
 ```
 
 ## Quick Start
@@ -130,6 +142,123 @@ myFunction = do
   -- ... function logic
 ```
 
+### Type-Safe Storage (Storable)
+
+```idris
+import Subcontract.Core.Storable
+
+-- Define a record with automatic slot layout
+record Member where
+  constructor MkMember
+  addr : Bits256
+  meta : Bits256
+
+Storable Member where
+  slotCount = 2
+  toSlots m = [m.addr, m.meta]
+  fromSlots [a, m] = MkMember a m
+
+-- Phantom-typed reference ensures type safety
+getMember : Ref Member -> IO Member
+getMember ref = get ref  -- Type guarantees correct slot count
+```
+
+### Compile-Time Invariants
+
+```idris
+import Subcontract.Core.Invariants
+
+-- Bounded values: value <= cap proven at compile time
+maxSupply : Bounded 1000000
+maxSupply = MkBounded 500000  -- Compiles: 500000 <= 1000000
+
+-- NonZero: safe division without runtime checks
+safeDiv : Nat -> NonZero -> Nat  -- Total function!
+
+-- TokenBalance: balance <= totalSupply by construction
+transfer : {supply : Nat}
+        -> (amount : Nat)
+        -> (sender : TokenBalance supply)
+        -> (recipient : TokenBalance supply)
+        -> (hasEnough : LTE amount (balance sender))      -- Proof required!
+        -> (noOverflow : LTE (balance recipient + amount) supply)
+        -> (TokenBalance supply, TokenBalance supply)
+```
+
+### Access Control as Types
+
+```idris
+import Subcontract.Core.AccessControl
+
+-- Functions require proof of role - not runtime check!
+transferOwnership : HasRole Owner currentOwner  -- Must provide proof
+                 -> OwnerStorage
+                 -> (newOwner : Bits256)
+                 -> IO ()
+
+-- Obtain proof at runtime, use at compile-time
+main : IO ()
+main = do
+  caller <- getCaller
+  mproof <- checkRole roleStore Owner caller
+  case mproof of
+    Nothing => revert  -- No proof available
+    Just prf => transferOwnership prf store newOwner  -- Proof provided
+```
+
+### Reentrancy Protection (Linear Types)
+
+```idris
+import Subcontract.Core.Reentrancy
+
+-- Lock is CONSUMED when acquired - prevents reentrancy at compile time
+withdraw : Lock Unlocked -> Amount -> IO (Lock Unlocked, Bool)
+withdraw lock amount = do
+  locked <- acquireLock lock     -- Lock Unlocked -> Lock Locked
+  success <- call recipient amount
+  unlocked <- releaseLock locked -- Lock Locked -> Lock Unlocked
+  pure (unlocked, success)
+
+-- This CANNOT compile - lock is already consumed:
+-- badWithdraw lock = withLock_ lock $ \_ => badWithdraw lock
+--                                           ^-- Error: lock consumed!
+```
+
+### Type-Safe External Calls
+
+```idris
+import Subcontract.Core.Call
+
+-- Typed call with explicit return type
+result <- typedCall @Bits256 (callTo target gas) calldata
+case result of
+  CallSuccess balance => use balance  -- Already typed!
+  CallReverted _ => handleError
+
+-- Safe ERC20 transfer
+success <- safeTransfer token recipient amount gas
+```
+
+### Compile-Time Gas Modeling
+
+```idris
+import Subcontract.Core.Gas
+
+-- Gas cost is part of the TYPE
+erc20TransferSeq : GasSeq 44400  -- Compile-time constant
+erc20TransferSeq = Then
+  (Then (Op ColdSLoad) (Op ColdSLoad))  -- Read balances
+  (Then (Op SStore) (Op SStore))        -- Write balances
+
+-- Prove gas fits limit at compile time
+erc20FitsLimit : GasFits TokenTransfer ERC20TransferGas
+erc20FitsLimit = MkGasFits prf  -- LTE 44400 65000
+
+-- Create bounded transaction - won't compile if exceeds limit!
+tx : BoundedTx ComplexTx
+tx = boundedTx ComplexTx computation gasSeq
+```
+
 ## Architecture
 
 ```
@@ -179,6 +308,23 @@ The Upgradeable Clone for Scalable contracts pattern:
               └────────────┘          └─────────────┘          └─────────────┘
 ```
 
+## Solidity vs Idris2 Comparison
+
+| Concern | Solidity (Runtime) | Idris2 (Compile-Time) |
+|---------|-------------------|----------------------|
+| Non-negative | `uint256` (implicit) | `Nat` / `Amount` |
+| Bounded value | `require(x <= cap)` | `Bounded cap` type |
+| Non-zero divisor | `require(d != 0)` | `NonZero` type |
+| Balance invariant | hope + audit | `TokenBalance supply` |
+| Access control | `require(hasRole)` | `HasRole role addr` proof |
+| Reentrancy guard | `bool _locked` + modifier | `Lock Unlocked/Locked` |
+| State machine | enum + require | `PropTransition from to` |
+| External calls | `(bool, bytes)` + decode | `CallResult a` typed |
+| Gas estimation | runtime / RPC estimate | `GasSeq n` compile-time |
+
+**Key insight**: In Solidity, invariants are runtime `require()` checks that can fail.
+In Idris2, invariants are types - violation is a compile error.
+
 ## Related Projects
 
 - [idris2-yul](https://github.com/shogochiai/idris2-yul) - Idris2 to EVM/Yul compiler
@@ -190,6 +336,7 @@ The Upgradeable Clone for Scalable contracts pattern:
 - [API Reference](docs/API.md) - Module API documentation
 - [Storage Guide](docs/STORAGE.md) - EVM storage layout guide
 - [Architecture](docs/ARCHITECTURE.md) - Layer design and rationale
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common integration issues
 
 ## License
 
