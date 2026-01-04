@@ -1,6 +1,6 @@
 # EVM Storage Layout Guide
 
-This guide explains how Solidity storage layout works and how idris2-mc implements it.
+This guide explains how Solidity storage layout works and how idris2-subcontract implements it.
 
 ## Background: EVM Storage Model
 
@@ -52,9 +52,9 @@ function computeSlot(string memory id) pure returns (bytes32) {
 }
 ```
 
-**Using idris2-mc at runtime:**
+**Using idris2-yul at runtime:**
 ```idris
-import MC.Std.Storage.ERC7201
+import EVM.Storage.Namespace
 
 -- From pre-computed namespace hash
 slot <- erc7201FromHash 0x3a4d5e6f...
@@ -72,8 +72,11 @@ address c;   // slot 2
 bool d;      // slot 3
 ```
 
-In idris2-mc:
+In idris2-subcontract:
 ```idris
+import EVM.Primitives
+import EVM.Storage.Namespace
+
 let slotA = structFieldSlot baseSlot 0
 let slotB = structFieldSlot baseSlot 1
 ```
@@ -92,8 +95,11 @@ mapping(address => uint256) balances;  // base slot 0
 // balances[addr] is at keccak256(addr . 0)
 ```
 
-In idris2-mc:
+In idris2-subcontract:
 ```idris
+import EVM.Primitives
+import EVM.Storage.Namespace
+
 slot <- mappingSlot 0 addr
 value <- sload slot
 ```
@@ -111,7 +117,7 @@ mapping(address => mapping(address => uint256)) allowances;
 // keccak256(spender . keccak256(owner . baseSlot))
 ```
 
-In idris2-mc:
+In idris2-subcontract:
 ```idris
 slot <- nestedMappingSlot baseSlot owner spender
 ```
@@ -131,8 +137,11 @@ address[] members;  // base slot 0
 // members[1] at keccak256(0) + 1
 ```
 
-In idris2-mc:
+In idris2-subcontract:
 ```idris
+import EVM.Primitives
+import EVM.Storage.Namespace
+
 len <- arrayLength baseSlot
 elementSlot <- arrayElementSlot baseSlot 3 1  -- members[3], 1 slot per element
 ```
@@ -148,7 +157,7 @@ struct User {
 }
 ```
 
-In idris2-mc:
+In idris2-subcontract:
 ```idris
 let addrSlot = structFieldSlot userSlot 0
 let balanceSlot = structFieldSlot userSlot 1
@@ -162,7 +171,7 @@ For `mapping(K => Struct)`, each struct starts at the computed slot:
 struct.field = keccak256(key . baseSlot) + fieldOffset
 ```
 
-In idris2-mc:
+In idris2-subcontract:
 ```idris
 userSlot <- mappingSlot usersBaseSlot addr
 let balanceSlot = structFieldSlot userSlot 1
@@ -175,7 +184,7 @@ For `Struct[]`, each struct element:
 array[i].field = keccak256(baseSlot) + i * structSize + fieldOffset
 ```
 
-In idris2-mc:
+In idris2-subcontract:
 ```idris
 -- Get slot for users[5].balance (struct size 3, balance at offset 1)
 elemSlot <- arrayElementSlot baseSlot 5 3
@@ -195,24 +204,16 @@ struct $Token {
 ```
 
 ```idris
-import MC.Std.Storage.ERC7201
-import MC.Std.Storage.Schema
+import EVM.Primitives
+import EVM.Storage.Namespace
 
 -- Pre-computed: keccak256(keccak256("myapp.token") - 1) & ~0xff
 TOKEN_SLOT : Integer
 TOKEN_SLOT = 0x...
 
-TokenSchema : Schema
-TokenSchema = MkSchema "myapp.token" TOKEN_SLOT
-  [ ValueField "totalSupply" TUint256 0
-  , MappingField "balances" TAddress TUint256 1
-  , NestedMappingField "allowances" TAddress TAddress TUint256 2
-  , ArrayField "holders" 1 3
-  ]
-
 -- Read total supply
 getTotalSupply : IO Integer
-getTotalSupply = sload (schemaRoot TokenSchema)
+getTotalSupply = sload TOKEN_SLOT
 
 -- Read balance
 getBalance : Integer -> IO Integer
@@ -239,6 +240,29 @@ getHolderAt idx = do
   readAddress slot
 ```
 
+## Using StorageCap for Controlled Access
+
+For more controlled storage access, use the capability pattern:
+
+```idris
+import Subcontract.Core.StorageCap
+
+-- Handler that reads balance (requires StorageCap)
+getBalanceHandler : Integer -> Handler Integer
+getBalanceHandler addr cap = do
+  slot <- mappingSlotCap cap (TOKEN_SLOT + 1) addr
+  sloadCap cap slot
+
+-- Framework provides capability
+main : IO ()
+main = do
+  addr <- caller
+  balance <- runHandler (getBalanceHandler addr)
+  returnUint balance
+```
+
+This pattern makes storage access explicit in function signatures.
+
 ## Packed Storage (Advanced)
 
 Solidity packs smaller types into single slots:
@@ -250,7 +274,7 @@ struct Packed {
 }
 ```
 
-idris2-mc currently treats all types as full slots. For packed storage, use bit manipulation:
+idris2-subcontract currently treats all types as full slots. For packed storage, use bit manipulation:
 ```idris
 -- Read uint128 from lower 128 bits
 readLower128 : Integer -> IO Integer
@@ -272,3 +296,4 @@ readMiddle64 slot = do
 3. **Document slot assignments** - Keep a mapping of fields to offsets
 4. **Test with known values** - Verify slot calculations match Solidity
 5. **Consider upgrades** - Use ERC-7201 for proxy-safe storage
+6. **Use StorageCap** - Make storage access explicit in type signatures

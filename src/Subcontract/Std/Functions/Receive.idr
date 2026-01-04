@@ -4,41 +4,7 @@
 ||| Handles the receive() fallback function.
 module Subcontract.Std.Functions.Receive
 
-import EVM.Storage.ERC7201
-
--- =============================================================================
--- Additional EVM Primitives
--- =============================================================================
-
-%foreign "evm:caller"
-prim__caller : PrimIO Integer
-
-%foreign "evm:callvalue"
-prim__callvalue : PrimIO Integer
-
-%foreign "evm:calldatasize"
-prim__calldatasize : PrimIO Integer
-
-%foreign "evm:log2"
-prim__log2 : Integer -> Integer -> Integer -> Integer -> PrimIO ()
-
-%foreign "evm:stop"
-prim__stop : PrimIO ()
-
-caller : IO Integer
-caller = primIO prim__caller
-
-callvalue : IO Integer
-callvalue = primIO prim__callvalue
-
-calldatasize : IO Integer
-calldatasize = primIO prim__calldatasize
-
-log2 : Integer -> Integer -> Integer -> Integer -> IO ()
-log2 off size topic1 topic2 = primIO (prim__log2 off size topic1 topic2)
-
-stop : IO ()
-stop = primIO prim__stop
+import EVM.Primitives
 
 -- =============================================================================
 -- Event Signature

@@ -9,9 +9,10 @@ Provides ERC-7546 UCS (Upgradeable Clone for Scalable contracts) implementation 
 idris2-subcontract provides:
 
 - **ERC-7546 Proxy**: DELEGATECALL-based proxy forwarding to dictionary
-- **Dictionary Contract**: Function selector → implementation mapping
+- **Dictionary Contract**: Function selector -> implementation mapping
 - **Standard Functions**: FeatureToggle, Clone, Receive
-- **Etherscan Verification**: Generate Solidity interfaces for ABI compatibility
+- **Type-Safe API**: ABI signatures, decoders, and entry points
+- **Storage Capability**: Controlled storage access via `StorageCap`
 
 ## Installation
 
@@ -26,45 +27,103 @@ path = "/path/to/idris2-subcontract"
 ipkg = "idris2-subcontract.ipkg"
 ```
 
-Then install:
+Then build:
 
 ```bash
-pack install idris2-subcontract
+pack build idris2-subcontract
 ```
 
 ### Dependencies
 
 - [idris2-yul](https://github.com/shogochiai/idris2-yul) - Idris2 to EVM/Yul compiler
 
-## Modules
+## Module Structure
 
-### Core
-
-| Module | Description |
-|--------|-------------|
-| `Subcontract.Core.Proxy` | ERC-7546 proxy with DELEGATECALL forwarding |
-| `Subcontract.Core.Dictionary` | Selector → implementation mapping management |
-
-### Standard Functions
-
-| Module | Description |
-|--------|-------------|
-| `Subcontract.Std.Functions.FeatureToggle` | Admin-controlled function enable/disable |
-| `Subcontract.Std.Functions.Clone` | EIP-1167 minimal proxy creation |
-| `Subcontract.Std.Functions.Receive` | ETH receive with event emission |
+```
+Subcontract/
+├── Standards/
+│   └── ERC7546/           # ERC-7546 implementation
+│       ├── Slots.idr      # Constants (DICTIONARY_SLOT, etc.)
+│       ├── Forward.idr    # Proxy forwarding logic
+│       ├── Proxy.idr      # Proxy exports
+│       └── Dictionary.idr # Dictionary contract
+├── Core/
+│   ├── Proxy.idr          # Re-exports Standards.ERC7546.Proxy
+│   ├── Dictionary.idr     # Re-exports Standards.ERC7546.Dictionary
+│   ├── Entry.idr          # Type-safe entry points
+│   ├── StorageCap.idr     # Storage capability token
+│   ├── ABI/
+│   │   ├── Sig.idr        # Function signatures
+│   │   └── Decoder.idr    # Calldata decoding
+│   └── ...
+└── Std/
+    └── Functions/
+        ├── FeatureToggle.idr  # Admin feature toggle
+        ├── Clone.idr          # EIP-1167 proxy cloning
+        └── Receive.idr        # ETH receive handling
+```
 
 ## Quick Start
 
+### Basic Proxy Contract
+
 ```idris
 import Subcontract.Core.Proxy
-import Subcontract.Core.Dictionary
-import Subcontract.Std.Functions.FeatureToggle
 
--- Use proxy forwarding
 main : IO ()
 main = proxyMain
+```
 
--- Check feature toggle before execution
+### Type-Safe Entry Points
+
+```idris
+import Subcontract.Core.Entry
+import Subcontract.Core.ABI.Sig
+import Subcontract.Core.ABI.Decoder
+
+-- Define signature
+addMemberSig : Sig
+addMemberSig = MkSig "addMember(address,bytes32)"
+
+addMemberSel : Sel addMemberSig
+addMemberSel = MkSel 0x12345678
+
+-- Create entry point
+addMemberEntry : Entry addMemberSig
+addMemberEntry = MkEntry addMemberSel $ do
+  (addr, meta) <- runDecoder (decodeAddress <&> decodeBytes32)
+  idx <- addMemberImpl (addrValue addr) (bytes32Value meta)
+  returnUint idx
+
+-- Dispatch
+main : IO ()
+main = dispatch [entry addMemberEntry]
+```
+
+### Storage Capability Pattern
+
+```idris
+import Subcontract.Core.StorageCap
+
+-- Handler receives StorageCap from framework
+myHandler : Handler Integer
+myHandler cap = do
+  val <- sloadCap cap SLOT_DATA
+  sstoreCap cap SLOT_DATA (val + 1)
+  pure val
+
+-- Framework provides capability
+main : IO ()
+main = do
+  result <- runHandler myHandler
+  returnUint result
+```
+
+### Feature Toggle
+
+```idris
+import Subcontract.Std.Functions.FeatureToggle
+
 myFunction : IO ()
 myFunction = do
   shouldBeActive 0x12345678  -- Revert if disabled
@@ -72,6 +131,39 @@ myFunction = do
 ```
 
 ## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        idris2-subcontract                           │
+├─────────────────────────────────────────────────────────────────────┤
+│  Subcontract.Std.Functions.*     Application-level functions       │
+│  Subcontract.Core.*              Framework core (Entry, StorageCap)│
+│  Subcontract.Standards.ERC7546.* ERC-7546 implementation           │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ imports
+┌──────────────────────────────▼──────────────────────────────────────┐
+│                          idris2-yul                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│  EVM.Primitives              All EVM FFI definitions               │
+│  EVM.Storage.Namespace       ERC-7201 slot calculations            │
+│  EVM.ABI.*                   ABI encoding/decoding                 │
+│  Compiler.EVM.*              Yul code generation                   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Layer Responsibilities
+
+| Layer | Package | Responsibility |
+|-------|---------|----------------|
+| FFI | idris2-yul | `%foreign "evm:*"` primitives |
+| Storage | idris2-yul | ERC-7201 slot calculations |
+| Standards | idris2-subcontract | ERC-7546 proxy/dictionary |
+| Framework | idris2-subcontract | Entry points, capabilities |
+| Application | your-project | Business logic |
+
+## ERC-7546 UCS Pattern
+
+The Upgradeable Clone for Scalable contracts pattern:
 
 ```
 ┌─────────────┐     DELEGATECALL     ┌────────────────┐
@@ -87,39 +179,17 @@ myFunction = do
               └────────────┘          └─────────────┘          └─────────────┘
 ```
 
-## Etherscan Verification
-
-Subcontracts generate Solidity interfaces for Etherscan verification:
-
-1. Define ABI using `EVM.ABI.Types` (in idris2-yul)
-2. Generate Solidity interface with `toSolidityInterface`
-3. Verify interface on Etherscan
-4. Proxy bytecode can be compared against repository
-
-```idris
-import EVM.ABI.Types
-import EVM.ABI.JSON
-
-myABI : ContractABI
-myABI = MkContractABI "MyContract"
-  [ MkFunction "propose" 0x12345678
-      [param "header" Bytes32, param "creator" Address]
-      [anon Uint256]
-      Nonpayable
-  ]
-  []  -- events
-  []  -- errors
-
--- Generate: interface IMyContract { function propose(bytes32,address) external returns (uint256); }
-solidityInterface : String
-solidityInterface = toSolidityInterface myABI
-```
-
 ## Related Projects
 
 - [idris2-yul](https://github.com/shogochiai/idris2-yul) - Idris2 to EVM/Yul compiler
-- [LazyEvm](https://github.com/ecdysisxyz/lazy) - Integration target
+- [idris2-textdao](https://github.com/ecdysisxyz/idris2-textdao) - Example application
 - [EIP-7546](https://eips.ethereum.org/EIPS/eip-7546) - UCS Proxy Standard
+
+## Documentation
+
+- [API Reference](docs/API.md) - Module API documentation
+- [Storage Guide](docs/STORAGE.md) - EVM storage layout guide
+- [Architecture](docs/ARCHITECTURE.md) - Layer design and rationale
 
 ## License
 

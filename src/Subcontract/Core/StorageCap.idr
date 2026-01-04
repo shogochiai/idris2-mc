@@ -10,7 +10,8 @@
 |||
 module Subcontract.Core.StorageCap
 
-import EVM.Storage.ERC7201
+import EVM.Primitives
+import EVM.Storage.Namespace
 
 -- =============================================================================
 -- StorageCap: Opaque Capability (constructor not exported)

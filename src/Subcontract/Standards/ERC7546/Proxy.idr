@@ -1,13 +1,14 @@
-||| MC Core: ERC-7546 UCS Proxy Contract
+||| ERC-7546 UCS Proxy Contract
 |||
-||| Implements the ERC-7546 proxy pattern using idris2-yul's storage API.
+||| Implements the ERC-7546 proxy pattern.
 ||| Queries dictionary for implementation address, then DELEGATECALLs to it.
 |||
 ||| Reference: https://eips.ethereum.org/EIPS/eip-7546
-module MC.Core.Proxy
+module Subcontract.Standards.ERC7546.Proxy
 
-import EVM.Storage.ERC7201
-import EVM.Storage.ERC7546
+import public EVM.Primitives
+import public Subcontract.Standards.ERC7546.Slots
+import public Subcontract.Standards.ERC7546.Forward
 
 -- =============================================================================
 -- Proxy Entry Point
@@ -30,22 +31,3 @@ proxyMain = forwardToImplementation
 export
 initializeProxy : Integer -> IO ()
 initializeProxy dictionary = setDictionary dictionary
-
--- =============================================================================
--- Query Functions (View)
--- =============================================================================
-
-||| Get the current dictionary address
-export
-getProxyDictionary : IO Integer
-getProxyDictionary = getDictionary
-
--- =============================================================================
--- Upgrade Functions (Admin only in practice)
--- =============================================================================
-
-||| Upgrade to a new dictionary
-||| Note: Access control should be implemented by the calling contract
-export
-upgradeProxyDictionary : Integer -> IO ()
-upgradeProxyDictionary = upgradeDictionary

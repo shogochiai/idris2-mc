@@ -14,41 +14,11 @@ module Subcontract.Core.Entry
 
 import public Subcontract.Core.ABI.Sig
 import public Subcontract.Core.ABI.Decoder
-import EVM.Storage.ERC7201
-
--- =============================================================================
--- EVM Primitives for Return/Revert
--- =============================================================================
-
-%foreign "evm:return"
-prim__return : Integer -> Integer -> PrimIO ()
-
-%foreign "evm:revert"
-prim__revert : Integer -> Integer -> PrimIO ()
-
-export
-evmReturn : Integer -> Integer -> IO ()
-evmReturn off len = primIO (prim__return off len)
-
-export
-evmRevert : Integer -> Integer -> IO ()
-evmRevert off len = primIO (prim__revert off len)
+import public EVM.Primitives
 
 -- =============================================================================
 -- Return Value Helpers
 -- =============================================================================
-
-||| Return a single uint256
-export
-returnUint : Integer -> IO ()
-returnUint val = do
-  mstore 0 val
-  evmReturn 0 32
-
-||| Return a boolean
-export
-returnBool : Bool -> IO ()
-returnBool b = returnUint (if b then 1 else 0)
 
 ||| Return two uint256 values
 export
@@ -69,17 +39,6 @@ record Entry (sig : Sig) where
   constructor MkEntry
   selector : Sel sig
   handler : IO ()
-
--- =============================================================================
--- Selector Extraction
--- =============================================================================
-
-||| Extract function selector from calldata (first 4 bytes, right-aligned)
-export
-getSelector : IO Integer
-getSelector = do
-  data_ <- calldataload 0
-  pure (data_ `div` 0x100000000000000000000000000000000000000000000000000000000)
 
 -- =============================================================================
 -- Dispatch

@@ -1,26 +1,10 @@
 ||| Subcontract Standard Function: FeatureToggle
 |||
 ||| Allows admin to enable/disable function selectors.
-||| Uses idris2-yul's ERC-7201 storage API.
 module Subcontract.Std.Functions.FeatureToggle
 
-import EVM.Storage.ERC7201
-
--- =============================================================================
--- Additional EVM Primitives
--- =============================================================================
-
-%foreign "evm:caller"
-prim__caller : PrimIO Integer
-
-%foreign "evm:revert"
-prim__revert : Integer -> Integer -> PrimIO ()
-
-caller : IO Integer
-caller = primIO prim__caller
-
-evmRevert : Integer -> Integer -> IO ()
-evmRevert off len = primIO (prim__revert off len)
+import EVM.Primitives
+import EVM.Storage.Namespace
 
 -- =============================================================================
 -- Storage Slots (ERC-7201)

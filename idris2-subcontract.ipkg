@@ -11,7 +11,11 @@ depends = base
         , contrib
         , idris2-yul
 
-modules = Subcontract.Core.Proxy
+modules = Subcontract.Standards.ERC7546.Slots
+        , Subcontract.Standards.ERC7546.Forward
+        , Subcontract.Standards.ERC7546.Proxy
+        , Subcontract.Standards.ERC7546.Dictionary
+        , Subcontract.Core.Proxy
         , Subcontract.Core.Dictionary
         , Subcontract.Core.Entry
         , Subcontract.Core.Process
@@ -19,6 +23,7 @@ modules = Subcontract.Core.Proxy
         , Subcontract.Core.Capability
         , Subcontract.Core.Bundle
         , Subcontract.Core.StorageCap
+        , Subcontract.Core.Schema
         , Subcontract.Core.ABI.Sig
         , Subcontract.Core.ABI.Decoder
         , Subcontract.Std.Functions.FeatureToggle

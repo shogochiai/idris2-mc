@@ -4,36 +4,8 @@
 ||| Uses EIP-1167 minimal proxy pattern.
 module Subcontract.Std.Functions.Clone
 
-import EVM.Storage.ERC7201
-import EVM.Storage.ERC7546
-
--- =============================================================================
--- Additional EVM Primitives
--- =============================================================================
-
-%foreign "evm:create"
-prim__create : Integer -> Integer -> Integer -> PrimIO Integer
-
-%foreign "evm:shl"
-prim__shl : Integer -> Integer -> PrimIO Integer
-
-%foreign "evm:or"
-prim__or : Integer -> Integer -> PrimIO Integer
-
-%foreign "evm:log2"
-prim__log2 : Integer -> Integer -> Integer -> Integer -> PrimIO ()
-
-create : Integer -> Integer -> Integer -> IO Integer
-create value off size = primIO (prim__create value off size)
-
-shl : Integer -> Integer -> IO Integer
-shl shift val = primIO (prim__shl shift val)
-
-bitor : Integer -> Integer -> IO Integer
-bitor a b = primIO (prim__or a b)
-
-log2 : Integer -> Integer -> Integer -> Integer -> IO ()
-log2 off size topic1 topic2 = primIO (prim__log2 off size topic1 topic2)
+import EVM.Primitives
+import Subcontract.Standards.ERC7546.Forward
 
 -- =============================================================================
 -- Event Signatures
@@ -65,8 +37,8 @@ createMinimalProxy dictionary = do
   -- Shift dictionary left 16 bits (2 bytes)
   dictShifted <- shl 16 dictionary
   -- Combine: prefix | dict | suffix2
-  tmp1 <- bitor prefixShifted dictShifted
-  word0 <- bitor tmp1 suffix2
+  tmp1 <- or prefixShifted dictShifted
+  word0 <- or tmp1 suffix2
   mstore 0 word0
 
   -- Remaining 13 bytes of suffix at offset 32
